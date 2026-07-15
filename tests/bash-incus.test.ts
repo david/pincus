@@ -5,33 +5,73 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import registerBashIncus, {
-	__testCreateIncusExecUserArgs,
+	__testCreateIncusExecArgs,
+	__testCreateIncusTerminatorArgs,
 	__testIncusCommandRunner,
 	__testIncusCommandTerminator,
+	__testIncusRunAsUser,
 } from "../extensions/bash-incus.ts";
 
-assert.deepEqual(__testCreateIncusExecUserArgs(), [
-	"--user",
-	String(process.getuid?.() ?? 1000),
-	"--group",
-	String(process.getgid?.() ?? 1000),
+const hostUid = String(process.getuid?.() ?? 1000);
+assert.deepEqual(__testCreateIncusExecArgs("dev", "/workspace/project", "/tmp/command.pid", "printf ok"), [
+	"exec",
+	"dev",
+	"--cwd",
+	"/workspace/project",
+	"--",
+	"bash",
+	"-c",
+	__testIncusRunAsUser,
+	"bash-incus-user",
+	hostUid,
+	__testIncusCommandRunner,
+	"/tmp/command.pid",
+	"printf ok",
 ]);
+assert.deepEqual(__testCreateIncusTerminatorArgs("dev", "/tmp/command.pid"), [
+	"exec",
+	"dev",
+	"--",
+	"bash",
+	"-c",
+	__testIncusCommandTerminator,
+	"bash-incus-cleanup",
+	"/tmp/command.pid",
+]);
+assert.doesNotMatch(__testIncusRunAsUser, /\b(?:HOME|USER|LOGNAME|PATH)=/);
 assert.doesNotMatch(__testIncusCommandRunner, /\b(?:HOME|USER|LOGNAME|PATH)=/);
 
 const environmentDirectory = await mkdtemp(join(tmpdir(), "pi-bash-incus-environment-"));
 const environmentPidFile = join(environmentDirectory, "group.pid");
+const runuserRecordFile = join(environmentDirectory, "runuser.txt");
+await writeFile(
+	join(environmentDirectory, "id"),
+	'#!/bin/sh\n[ "$1" = "-nu" ] || exit 1\nprintf "merlin\\n"\n',
+	{ mode: 0o755 },
+);
+await writeFile(
+	join(environmentDirectory, "runuser"),
+	'#!/bin/sh\n[ "$1" = "-u" ] && [ "$2" = "merlin" ] && [ "$3" = "--" ] || exit 1\nprintf "%s\\n" "$2" > "$RUNUSER_RECORD"\nshift 3\nexport HOME=/home/merlin USER=merlin LOGNAME=merlin\nexec "$@"\n',
+	{ mode: 0o755 },
+);
 const environmentRunner = spawn(
-	"setsid",
+	"bash",
 	[
-		"bash",
 		"-c",
+		__testIncusRunAsUser,
+		"bash-incus-user",
+		hostUid,
 		__testIncusCommandRunner,
-		"bash-incus",
 		environmentPidFile,
 		'printf "%s\\n" "$HOME"',
 	],
 	{
-		env: { ...process.env, HOME: "/container/home", USER: "container-user", LOGNAME: "container-logname" },
+		env: {
+			...process.env,
+			HOME: "/host/home",
+			PATH: `${environmentDirectory}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+			RUNUSER_RECORD: runuserRecordFile,
+		},
 		stdio: ["ignore", "pipe", "pipe"],
 	},
 );
@@ -41,7 +81,8 @@ environmentRunner.stdout.on("data", (data) => environmentOutput.push(data));
 environmentRunner.stderr.on("data", (data) => environmentErrors.push(data));
 const [environmentCode] = (await once(environmentRunner, "close")) as [number | null];
 assert.equal(environmentCode, 0, Buffer.concat(environmentErrors).toString());
-assert.equal(Buffer.concat(environmentOutput).toString().trim(), "/container/home");
+assert.equal(Buffer.concat(environmentOutput).toString().trim(), "/home/merlin");
+assert.equal((await readFile(runuserRecordFile, "utf8")).trim(), "merlin");
 await rm(environmentDirectory, { recursive: true, force: true });
 
 const testAgentDir = await mkdtemp(join(tmpdir(), "pi-bash-incus-agent-"));

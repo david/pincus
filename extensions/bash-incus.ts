@@ -18,10 +18,13 @@ const CONFIG_FILE = "bash-incus.json";
 const LEGACY_CONFIG_FILE = "incus-bash.json";
 const INCUS_COMMAND_RUNNER =
 	'pid_file=$1; command=$2; umask 077; printf "%s\\n" "$$" > "$pid_file"; bash -lc "$command"; status=$?; rm -f -- "$pid_file"; exit "$status"';
+const INCUS_RUN_AS_USER =
+	'uid=$1; runner=$2; pid_file=$3; command=$4; user=$(id -nu "$uid") || { printf "No container user found for UID %s\\n" "$uid" >&2; exit 1; }; exec runuser -u "$user" -- setsid bash -c "$runner" bash-incus "$pid_file" "$command"';
 const INCUS_COMMAND_TERMINATOR =
 	'pid_file=$1; attempt=0; while [ ! -r "$pid_file" ] && [ "$attempt" -lt 20 ]; do sleep 0.05; attempt=$((attempt + 1)); done; if [ -r "$pid_file" ]; then IFS= read -r pgid < "$pid_file"; case "$pgid" in ""|*[!0-9]*) exit 1;; esac; kill -TERM -- "-$pgid" 2>/dev/null || true; attempt=0; while kill -0 -- "-$pgid" 2>/dev/null && [ "$attempt" -lt 20 ]; do sleep 0.05; attempt=$((attempt + 1)); done; kill -KILL -- "-$pgid" 2>/dev/null || true; rm -f -- "$pid_file"; fi';
 
 export const __testIncusCommandRunner = INCUS_COMMAND_RUNNER;
+export const __testIncusRunAsUser = INCUS_RUN_AS_USER;
 export const __testIncusCommandTerminator = INCUS_COMMAND_TERMINATOR;
 
 const bashIncusSchema = Type.Object({
@@ -111,37 +114,46 @@ function mapCwd(hostCwd: string, cwd: string, containerCwd?: string): string {
 	return cwd;
 }
 
-function createIncusExecUserArgs(): string[] {
+function createIncusExecArgs(container: string, cwd: string, pidFile: string, command: string): string[] {
 	return [
-		"--user",
+		"exec",
+		container,
+		"--cwd",
+		cwd,
+		"--",
+		"bash",
+		"-c",
+		INCUS_RUN_AS_USER,
+		"bash-incus-user",
 		String(process.getuid?.() ?? 1000),
-		"--group",
-		String(process.getgid?.() ?? 1000),
+		INCUS_COMMAND_RUNNER,
+		pidFile,
+		command,
 	];
 }
 
-export const __testCreateIncusExecUserArgs = createIncusExecUserArgs;
+function createIncusTerminatorArgs(container: string, pidFile: string): string[] {
+	return [
+		"exec",
+		container,
+		"--",
+		"bash",
+		"-c",
+		INCUS_COMMAND_TERMINATOR,
+		"bash-incus-cleanup",
+		pidFile,
+	];
+}
+
+export const __testCreateIncusExecArgs = createIncusExecArgs;
+export const __testCreateIncusTerminatorArgs = createIncusTerminatorArgs;
 
 function createIncusCommandPidFile(): string {
 	return `/tmp/pi-bash-incus-${process.getuid?.() ?? 1000}-${randomUUID()}.pid`;
 }
 
 function terminateIncusProcessGroup(container: string, pidFile: string, onComplete: () => void) {
-	const terminator = spawn(
-		"incus",
-		[
-			"exec",
-			container,
-			...createIncusExecUserArgs(),
-			"--",
-			"bash",
-			"-c",
-			INCUS_COMMAND_TERMINATOR,
-			"bash-incus-cleanup",
-			pidFile,
-		],
-		{ stdio: "ignore" },
-	);
+	const terminator = spawn("incus", createIncusTerminatorArgs(container, pidFile), { stdio: "ignore" });
 	let completed = false;
 	const complete = () => {
 		if (completed) return;
@@ -159,21 +171,12 @@ function createBashIncusOps(hostCwd: string, state: Required<Pick<BashIncusState
 				const pidFile = createIncusCommandPidFile();
 				const child = spawn(
 					"incus",
-					[
-						"exec",
+					createIncusExecArgs(
 						state.container,
-						"--cwd",
 						mapCwd(hostCwd, cwd, state.containerCwd),
-						...createIncusExecUserArgs(),
-						"--",
-						"setsid",
-						"bash",
-						"-c",
-						INCUS_COMMAND_RUNNER,
-						"bash-incus",
 						pidFile,
 						command,
-					],
+					),
 					{ stdio: ["ignore", "pipe", "pipe"] },
 				);
 

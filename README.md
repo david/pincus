@@ -2,6 +2,9 @@
 
 A [Pi](https://github.com/earendil-works/pi-mono) extension that routes the `bash` tool and user `!`/`!!` commands through an existing [Incus](https://linuxcontainers.org/incus/) container.
 
+> [!NOTE]
+> `pi-bash-incus` currently supports Linux hosts and Linux containers only.
+
 Pi's `read`, `edit`, and `write` tools continue to use the host filesystem. The project should therefore be mounted at matching paths on the host and in the container, or configured with a container-side working directory.
 
 ## Install
@@ -15,7 +18,7 @@ pi install git:github.com/david/pi-bash-incus
 Or install a pinned release:
 
 ```bash
-pi install git:github.com/david/pi-bash-incus@v0.2.1
+pi install git:github.com/david/pi-bash-incus@v0.2.2
 ```
 
 Restart Pi or run `/reload` after installation.
@@ -24,11 +27,11 @@ Restart Pi or run `/reload` after installation.
 
 - The `incus` CLI on the host.
 - An already-running Incus container.
-- `bash` and `setsid` in the container.
-- A container user with the same UID and GID as the host user.
+- `bash`, `id`, `runuser`, and `setsid` in the container.
+- A container user with the same UID as the host user and access to the mounted project files.
 - Project files mounted into the container.
 
-The extension passes the host UID/GID and selected working directory to `incus exec`, but it does not set or forward `HOME`, `USER`, `LOGNAME`, `PATH`, or other environment variables. Those values come entirely from Incus and the container's login shell configuration.
+The extension passes the host UID and selected working directory to a root `incus exec` wrapper. The wrapper resolves the matching container username and uses `runuser` to initialize that account's container-native environment before running the command. The extension does not set or forward host `HOME`, `USER`, `LOGNAME`, `PATH`, or other environment variables.
 
 ## Usage
 

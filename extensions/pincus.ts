@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path, { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type {
 	BashOperations,
@@ -82,13 +82,8 @@ const CONFIG_FILE = "pincus.json";
 const LEGACY_CONFIG_FILES = ["bash-incus.json", "incus-bash.json"] as const;
 const DEFAULT_GREP_LIMIT = 100;
 const GREP_MAX_LINE_LENGTH = 500;
-const SUPPORTED_IMAGE_MIME_TYPES = new Set([
-	"image/bmp",
-	"image/gif",
-	"image/jpeg",
-	"image/png",
-	"image/webp",
-]);
+const PI_CLIPBOARD_IMAGE_PATTERN =
+	/^pi-clipboard-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:bmp|gif|jpe?g|png|webp)$/i;
 
 const INCUS_OPERATION_RUNNER =
 	'pid_file=$1; shift; umask 077; printf "%s\\n" "$$" > "$pid_file"; "$@"; status=$?; rm -f -- "$pid_file"; exit "$status"';
@@ -108,6 +103,35 @@ function stripAtPrefix(value: string): string {
 function isWithin(root: string, value: string): boolean {
 	const relativePath = relative(root, value);
 	return relativePath === "" || (!relativePath.startsWith(`..${path.sep}`) && relativePath !== ".." && !isAbsolute(relativePath));
+}
+
+function isHostClipboardImagePath(inputPath: string): boolean {
+	const absolutePath = resolve(stripAtPrefix(inputPath));
+	return (
+		dirname(absolutePath) === resolve(tmpdir()) &&
+		PI_CLIPBOARD_IMAGE_PATTERN.test(basename(absolutePath)) &&
+		existsSync(absolutePath)
+	);
+}
+
+function detectImageMimeType(buffer: Buffer): string | null {
+	if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+		return "image/png";
+	}
+	if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "image/jpeg";
+	if (buffer.length >= 6) {
+		const signature = buffer.subarray(0, 6).toString("ascii");
+		if (signature === "GIF87a" || signature === "GIF89a") return "image/gif";
+	}
+	if (
+		buffer.length >= 12 &&
+		buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+		buffer.subarray(8, 12).toString("ascii") === "WEBP"
+	) {
+		return "image/webp";
+	}
+	if (buffer.length >= 2 && buffer[0] === 0x42 && buffer[1] === 0x4d) return "image/bmp";
+	return null;
 }
 
 /** Map host paths in Pi's startup tree while leaving container absolute paths intact. */
@@ -331,26 +355,28 @@ async function executeChecked(
 }
 
 function createReadOperations(executor: IncusExecutor, mapping: PincusMapping, signal?: AbortSignal): ReadOperations {
+	const reads = new Map<string, Promise<Buffer>>();
+	const readFile = (filePath: string): Promise<Buffer> => {
+		const mappedPath = mapPincusPath(mapping, filePath);
+		let pending = reads.get(mappedPath);
+		if (!pending) {
+			pending = executeChecked(executor, "cat", ["--", mappedPath], { cwd: mapping.containerRoot, signal }).then(
+				(result) => result.stdout,
+			);
+			reads.set(mappedPath, pending);
+		}
+		return pending;
+	};
+
 	return {
-		readFile: async (filePath) =>
-			(await executeChecked(executor, "cat", ["--", mapPincusPath(mapping, filePath)], { cwd: mapping.containerRoot, signal }))
-				.stdout,
+		readFile,
 		access: async (filePath) => {
 			await executeChecked(executor, "test", ["-r", mapPincusPath(mapping, filePath)], {
 				cwd: mapping.containerRoot,
 				signal,
 			});
 		},
-		detectImageMimeType: async (filePath) => {
-			const result = await executeChecked(
-				executor,
-				"file",
-				["--brief", "--mime-type", "--", mapPincusPath(mapping, filePath)],
-				{ cwd: mapping.containerRoot, signal },
-			);
-			const mimeType = result.stdout.toString("utf8").trim();
-			return SUPPORTED_IMAGE_MIME_TYPES.has(mimeType) ? mimeType : null;
-		},
+		detectImageMimeType: async (filePath) => detectImageMimeType(await readFile(filePath)),
 	};
 }
 
@@ -664,7 +690,9 @@ export default function registerPincus(pi: ExtensionAPI): void {
 			...localTools.read,
 			async execute(id, params, signal, onUpdate) {
 				const backend = activeBackend();
-				if (!backend) return localTools.read.execute(id, params, signal, onUpdate);
+				if (!backend || isHostClipboardImagePath(params.path)) {
+					return localTools.read.execute(id, params, signal, onUpdate);
+				}
 				return createReadTool(backend.mapping.containerRoot, {
 					operations: createReadOperations(backend.executor, backend.mapping, signal),
 				}).execute(id, params, signal, onUpdate);

@@ -28,13 +28,13 @@ Pincus does **not** move the Pi process into the container. Custom extension too
 - The project available inside the container, normally through an Incus disk device or another mount.
 - These container commands:
   - `bash`, `id`, `runuser`, and `setsid`
-  - `cat`, `file`, `find`, `mkdir`, `tee`, and `test`
+  - `cat`, `find`, `mkdir`, `tee`, and `test`
   - `fd` for the `find` tool
   - `rg` (ripgrep) for the `grep` tool
 
 Each operation starts through root `incus exec`, resolves the container username for the host UID, and then uses `runuser` plus a login Bash shell. This gives the operation the container user's permissions and container-native environment. Pincus does not forward the host `HOME`, `USER`, `LOGNAME`, `PATH`, or other command environment values.
 
-Arguments and paths are passed as process arguments rather than interpolated into shell source. Writes send file content over stdin. Cancellation and timeouts terminate the operation's container process group, including descendants.
+Arguments and paths are passed as process arguments rather than interpolated into shell source. Writes send file content over stdin. Cancellation and timeouts terminate the operation's container process group, including descendants. Image MIME types are detected from file signatures, so the container does not need the `file` utility.
 
 ## Install
 
@@ -126,6 +126,8 @@ Pincus maps paths as follows:
 - Other valid container absolute paths, such as `/etc/os-release`, stay unchanged
 
 Relative paths, including paths containing `..`, resolve from the container cwd. If `cwd` is omitted, Pincus uses the same absolute path in the container as Pi's host startup directory.
+
+Pi stores pasted clipboard images in the host temporary directory as `pi-clipboard-<uuid>.<image-extension>`. When such a file exists on the host, Pincus intentionally delegates that read to Pi's local read backend so image attachments continue to work. Other `/tmp` paths remain container paths.
 
 ## Compatibility with other backends
 

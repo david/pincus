@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -54,6 +55,10 @@ if [ "$4" = pincus-user ]; then
   runner=$6
   pid_file=$7
   shift 7
+  if [ "$1" = file ]; then
+    printf "file must not be used by Pincus read operations\\n" >&2
+    exit 127
+  fi
   exec setsid bash -lc "$runner" pincus-operation "$pid_file" "$@"
 fi
 if [ "$4" = pincus-cleanup ]; then
@@ -411,21 +416,29 @@ test("all built-in project tools route to a differently mounted container root",
 	}
 });
 
-test("binary image reads preserve built-in image result shape", async () => {
+test("image reads use magic bytes without file and host clipboard images stay local", async () => {
 	const harness = await createHarness();
+	const clipboardPath = join(tmpdir(), `pi-clipboard-${randomUUID()}.png`);
 	try {
 		await harness.commands.get("pincus").handler(`dev ${harness.containerRoot}`, harness.ctx);
 		const png = Buffer.from(
 			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
 			"base64",
 		);
-		await writeFile(join(harness.containerRoot, "pixel.png"), png);
-		const result = await execute(harness.tools.get("read"), { path: "pixel.png" });
-		assert.match(result.content[0].text, /^Read image file \[image\/png\]/);
-		assert.equal(result.content[1].type, "image");
-		assert.equal(result.content[1].mimeType, "image/png");
-		assert.ok(result.content[1].data.length > 0);
+		await writeFile(join(harness.containerRoot, "pixel-without-extension"), png);
+		const containerResult = await execute(harness.tools.get("read"), { path: "pixel-without-extension" });
+		assert.match(containerResult.content[0].text, /^Read image file \[image\/png\]/);
+		assert.equal(containerResult.content[1].type, "image");
+		assert.equal(containerResult.content[1].mimeType, "image/png");
+		assert.ok(containerResult.content[1].data.length > 0);
+
+		await writeFile(clipboardPath, png);
+		const clipboardResult = await execute(harness.tools.get("read"), { path: clipboardPath });
+		assert.match(clipboardResult.content[0].text, /^Read image file \[image\/png\]/);
+		assert.equal(clipboardResult.content[1].type, "image");
+		assert.equal(clipboardResult.content[1].mimeType, "image/png");
 	} finally {
+		await rm(clipboardPath, { force: true });
 		await harness.cleanup();
 	}
 });

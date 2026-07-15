@@ -129,6 +129,8 @@ Relative paths, including paths containing `..`, resolve from the container cwd.
 
 Pi stores pasted clipboard images in the host temporary directory as `pi-clipboard-<uuid>.<image-extension>`. When such a file exists on the host, Pincus intentionally delegates that read to Pi's local read backend so image attachments continue to work. Other `/tmp` paths remain container paths.
 
+Pi also discovers skills on the host and tells the agent to load their instructions with the `read` tool. Reads within those discovered skill directories use Pi's local read backend so global, project, package, configured, and CLI-provided skills remain available while Pincus is active.
+
 ## Compatibility with other backends
 
 Pincus registers built-in tool overrides only after Incus mode is activated. An unconfigured project therefore does not replace another backend extension. Each override is registered at most once. If Pincus is disabled later, its registered overrides delegate to Pi's local built-in tools.

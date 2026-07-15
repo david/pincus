@@ -665,6 +665,14 @@ export default function registerPincus(pi: ExtensionAPI): void {
 	};
 	const state: PincusState = { enabled: false };
 	let overridesRegistered = false;
+	let hostSkillRoots: string[] = [];
+
+	const isHostSkillPath = (inputPath: string) => {
+		const value = stripAtPrefix(inputPath);
+		if (!isAbsolute(value)) return false;
+		const absolutePath = resolve(value);
+		return hostSkillRoots.some((root) => isWithin(root, absolutePath));
+	};
 
 	const activeBackend = () => {
 		if (!state.enabled || !state.container) return undefined;
@@ -690,7 +698,7 @@ export default function registerPincus(pi: ExtensionAPI): void {
 			...localTools.read,
 			async execute(id, params, signal, onUpdate) {
 				const backend = activeBackend();
-				if (!backend || isHostClipboardImagePath(params.path)) {
+				if (!backend || isHostClipboardImagePath(params.path) || isHostSkillPath(params.path)) {
 					return localTools.read.execute(id, params, signal, onUpdate);
 				}
 				return createReadTool(backend.mapping.containerRoot, {
@@ -778,10 +786,11 @@ export default function registerPincus(pi: ExtensionAPI): void {
 	});
 
 	pi.on("before_agent_start", (event) => {
+		hostSkillRoots = (event.systemPromptOptions?.skills ?? []).map((skill) => resolve(skill.baseDir));
 		if (!state.enabled || !state.container) return;
 		const containerRoot = state.containerCwd ?? hostRoot;
 		return {
-			systemPrompt: `${event.systemPrompt}\n\nPincus mode is enabled. The built-in bash, read, write, edit, ls, find, and grep tools, plus user !/!! commands, run inside existing Incus container ${JSON.stringify(state.container)} as the container user whose UID matches the host UID. Pi started on the host in ${JSON.stringify(hostRoot)}; that directory corresponds to ${JSON.stringify(containerRoot)} in the container. Resolve relative tool paths from the container path. Host absolute paths under ${JSON.stringify(hostRoot)} are translated to the matching path under ${JSON.stringify(containerRoot)}. Other valid container absolute paths are used unchanged. Pi configuration, sessions, custom tools, and MCP tools remain on the host.`,
+			systemPrompt: `${event.systemPrompt}\n\nPincus mode is enabled. The built-in bash, read, write, edit, ls, find, and grep tools, plus user !/!! commands, run inside existing Incus container ${JSON.stringify(state.container)} as the container user whose UID matches the host UID. Pi started on the host in ${JSON.stringify(hostRoot)}; that directory corresponds to ${JSON.stringify(containerRoot)} in the container. Resolve relative tool paths from the container path. Host absolute paths under ${JSON.stringify(hostRoot)} are translated to the matching path under ${JSON.stringify(containerRoot)}. Other valid container absolute paths are used unchanged. Reads within skills discovered by host Pi stay on the host so their instructions and supporting files remain available. Pi configuration, sessions, custom tools, and MCP tools remain on the host.`,
 		};
 	});
 

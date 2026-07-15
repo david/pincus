@@ -416,6 +416,41 @@ test("all built-in project tools route to a differently mounted container root",
 	}
 });
 
+test("discovered skill files stay on the host", async () => {
+	const harness = await createHarness();
+	const skillRoot = join(harness.hostRoot, ".agents", "skills", "prompt-only");
+	const skillPath = join(skillRoot, "SKILL.md");
+	try {
+		await mkdir(skillRoot, { recursive: true });
+		await writeFile(skillPath, "# Prompt only\n\nHost skill instructions.\n");
+		await harness.commands.get("pincus").handler(`dev ${harness.containerRoot}`, harness.ctx);
+		await harness.handlers.get("before_agent_start")?.(
+			{
+				systemPrompt: "base",
+				systemPromptOptions: {
+					skills: [
+						{
+							name: "prompt-only",
+							description: "Test skill",
+							filePath: skillPath,
+							baseDir: skillRoot,
+							sourceInfo: {},
+							disableModelInvocation: false,
+						},
+					],
+				},
+			},
+			harness.ctx,
+		);
+
+		const skillResult = await execute(harness.tools.get("read"), { path: skillPath });
+		assert.equal(skillResult.content[0].text, "# Prompt only\n\nHost skill instructions.\n");
+		await assert.rejects(readFile(join(harness.containerRoot, ".agents", "skills", "prompt-only", "SKILL.md")));
+	} finally {
+		await harness.cleanup();
+	}
+});
+
 test("image reads use magic bytes without file and host clipboard images stay local", async () => {
 	const harness = await createHarness();
 	const clipboardPath = join(tmpdir(), `pi-clipboard-${randomUUID()}.png`);

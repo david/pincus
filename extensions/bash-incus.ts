@@ -12,7 +12,7 @@ import {
 	watchFile,
 	writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { BashOperations, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createBashTool, getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -215,22 +215,22 @@ function mapCwd(hostCwd: string, cwd: string, containerCwd?: string): string {
 	return cwd;
 }
 
-function createIncusExecUserEnvArgs(): string[] {
-	const user = process.env.USER || process.env.LOGNAME || "david";
-	const home = process.env.HOME || `/home/${user}`;
-	const path = [
-		`${home}/.pi/agent/bin`,
-		`${home}/.bun/bin`,
-		`${home}/.local/bin`,
-		"/home/linuxbrew/.linuxbrew/bin",
-		"/home/linuxbrew/.linuxbrew/sbin",
-		"/usr/local/sbin",
-		"/usr/local/bin",
-		"/usr/sbin",
-		"/usr/bin",
-		"/sbin",
-		"/bin",
-	].join(":");
+function createIncusExecUserEnvArgs(env: NodeJS.ProcessEnv = process.env): string[] {
+	const user = env.USER || env.LOGNAME || userInfo().username;
+	const home = env.HOME || homedir();
+	const path =
+		env.PATH ||
+		[
+			`${home}/.pi/agent/bin`,
+			`${home}/.bun/bin`,
+			`${home}/.local/bin`,
+			"/usr/local/sbin",
+			"/usr/local/bin",
+			"/usr/sbin",
+			"/usr/bin",
+			"/sbin",
+			"/bin",
+		].join(":");
 
 	return [
 		"--user",
@@ -247,6 +247,8 @@ function createIncusExecUserEnvArgs(): string[] {
 		`PATH=${path}`,
 	];
 }
+
+export const __testCreateIncusExecUserEnvArgs = createIncusExecUserEnvArgs;
 
 function createIncusCommandPidFile(): string {
 	return `/tmp/pi-bash-incus-${process.getuid?.() ?? 1000}-${randomUUID()}.pid`;

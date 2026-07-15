@@ -4,7 +4,21 @@ import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import registerBashIncus, { __testIncusCommandRunner, __testIncusCommandTerminator } from "../extensions/bash-incus.ts";
+import registerBashIncus, {
+	__testCreateIncusExecUserEnvArgs,
+	__testIncusCommandRunner,
+	__testIncusCommandTerminator,
+} from "../extensions/bash-incus.ts";
+
+const environmentArgs = __testCreateIncusExecUserEnvArgs({
+	USER: "alice",
+	HOME: "/srv/alice",
+	PATH: "/opt/alice/bin:/usr/bin",
+});
+assert.ok(environmentArgs.includes("HOME=/srv/alice"));
+assert.ok(environmentArgs.includes("USER=alice"));
+assert.ok(environmentArgs.includes("LOGNAME=alice"));
+assert.ok(environmentArgs.includes("PATH=/opt/alice/bin:/usr/bin"));
 
 const testAgentDir = await mkdtemp(join(tmpdir(), "pi-bash-incus-agent-"));
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;

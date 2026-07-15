@@ -1,6 +1,6 @@
 {
   "name": "pi-bash-incus",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Run Pi bash commands inside an Incus container",
   "type": "module",
   "license": "MIT",

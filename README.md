@@ -15,7 +15,7 @@ pi install git:github.com/david/pi-bash-incus
 Or install a pinned release:
 
 ```bash
-pi install git:github.com/david/pi-bash-incus@v0.2.0
+pi install git:github.com/david/pi-bash-incus@v0.2.1
 ```
 
 Restart Pi or run `/reload` after installation.
@@ -27,6 +27,8 @@ Restart Pi or run `/reload` after installation.
 - `bash` and `setsid` in the container.
 - A container user with the same UID and GID as the host user.
 - Project files mounted into the container.
+
+The extension passes the host UID/GID and selected working directory to `incus exec`, but it does not set or forward `HOME`, `USER`, `LOGNAME`, `PATH`, or other environment variables. Those values come entirely from Incus and the container's login shell configuration.
 
 ## Usage
 

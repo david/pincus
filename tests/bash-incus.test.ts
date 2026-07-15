@@ -5,20 +5,44 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import registerBashIncus, {
-	__testCreateIncusExecUserEnvArgs,
+	__testCreateIncusExecUserArgs,
 	__testIncusCommandRunner,
 	__testIncusCommandTerminator,
 } from "../extensions/bash-incus.ts";
 
-const environmentArgs = __testCreateIncusExecUserEnvArgs({
-	USER: "alice",
-	HOME: "/srv/alice",
-	PATH: "/opt/alice/bin:/usr/bin",
-});
-assert.ok(environmentArgs.includes("HOME=/srv/alice"));
-assert.ok(environmentArgs.includes("USER=alice"));
-assert.ok(environmentArgs.includes("LOGNAME=alice"));
-assert.ok(environmentArgs.includes("PATH=/opt/alice/bin:/usr/bin"));
+assert.deepEqual(__testCreateIncusExecUserArgs(), [
+	"--user",
+	String(process.getuid?.() ?? 1000),
+	"--group",
+	String(process.getgid?.() ?? 1000),
+]);
+assert.doesNotMatch(__testIncusCommandRunner, /\b(?:HOME|USER|LOGNAME|PATH)=/);
+
+const environmentDirectory = await mkdtemp(join(tmpdir(), "pi-bash-incus-environment-"));
+const environmentPidFile = join(environmentDirectory, "group.pid");
+const environmentRunner = spawn(
+	"setsid",
+	[
+		"bash",
+		"-c",
+		__testIncusCommandRunner,
+		"bash-incus",
+		environmentPidFile,
+		'printf "%s\\n" "$HOME"',
+	],
+	{
+		env: { ...process.env, HOME: "/container/home", USER: "container-user", LOGNAME: "container-logname" },
+		stdio: ["ignore", "pipe", "pipe"],
+	},
+);
+const environmentOutput: Buffer[] = [];
+const environmentErrors: Buffer[] = [];
+environmentRunner.stdout.on("data", (data) => environmentOutput.push(data));
+environmentRunner.stderr.on("data", (data) => environmentErrors.push(data));
+const [environmentCode] = (await once(environmentRunner, "close")) as [number | null];
+assert.equal(environmentCode, 0, Buffer.concat(environmentErrors).toString());
+assert.equal(Buffer.concat(environmentOutput).toString().trim(), "/container/home");
+await rm(environmentDirectory, { recursive: true, force: true });
 
 const testAgentDir = await mkdtemp(join(tmpdir(), "pi-bash-incus-agent-"));
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;

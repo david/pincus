@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { homedir, userInfo } from "node:os";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { BashOperations, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createBashTool, getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -111,40 +111,16 @@ function mapCwd(hostCwd: string, cwd: string, containerCwd?: string): string {
 	return cwd;
 }
 
-function createIncusExecUserEnvArgs(env: NodeJS.ProcessEnv = process.env): string[] {
-	const user = env.USER || env.LOGNAME || userInfo().username;
-	const home = env.HOME || homedir();
-	const path =
-		env.PATH ||
-		[
-			`${home}/.pi/agent/bin`,
-			`${home}/.bun/bin`,
-			`${home}/.local/bin`,
-			"/usr/local/sbin",
-			"/usr/local/bin",
-			"/usr/sbin",
-			"/usr/bin",
-			"/sbin",
-			"/bin",
-		].join(":");
-
+function createIncusExecUserArgs(): string[] {
 	return [
 		"--user",
 		String(process.getuid?.() ?? 1000),
 		"--group",
 		String(process.getgid?.() ?? 1000),
-		"--env",
-		`HOME=${home}`,
-		"--env",
-		`USER=${user}`,
-		"--env",
-		`LOGNAME=${user}`,
-		"--env",
-		`PATH=${path}`,
 	];
 }
 
-export const __testCreateIncusExecUserEnvArgs = createIncusExecUserEnvArgs;
+export const __testCreateIncusExecUserArgs = createIncusExecUserArgs;
 
 function createIncusCommandPidFile(): string {
 	return `/tmp/pi-bash-incus-${process.getuid?.() ?? 1000}-${randomUUID()}.pid`;
@@ -156,7 +132,7 @@ function terminateIncusProcessGroup(container: string, pidFile: string, onComple
 		[
 			"exec",
 			container,
-			...createIncusExecUserEnvArgs(),
+			...createIncusExecUserArgs(),
 			"--",
 			"bash",
 			"-c",
@@ -188,7 +164,7 @@ function createBashIncusOps(hostCwd: string, state: Required<Pick<BashIncusState
 						state.container,
 						"--cwd",
 						mapCwd(hostCwd, cwd, state.containerCwd),
-						...createIncusExecUserEnvArgs(),
+						...createIncusExecUserArgs(),
 						"--",
 						"setsid",
 						"bash",

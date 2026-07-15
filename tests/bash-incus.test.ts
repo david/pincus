@@ -66,6 +66,8 @@ try {
 	);
 	await bashIncusCommand.handler("", ctx);
 	assert.equal(registeredTools.length, 1);
+	const bashTool = registeredTools[0] as { parameters: { properties: Record<string, unknown> } };
+	assert.deepEqual(Object.keys(bashTool.parameters.properties).sort(), ["command", "timeout"]);
 	assert.deepEqual(JSON.parse(await readFile(join(testAgentDir, ".pi", "bash-incus.json"), "utf8")), {
 		enabled: true,
 		container: "dev",

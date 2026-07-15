@@ -15,7 +15,7 @@ pi install git:github.com/david/pi-bash-incus
 Or install a pinned release:
 
 ```bash
-pi install git:github.com/david/pi-bash-incus@v0.1.1
+pi install git:github.com/david/pi-bash-incus@v0.2.0
 ```
 
 Restart Pi or run `/reload` after installation.
@@ -80,12 +80,6 @@ Example:
 ```
 
 Legacy global and project `incus-bash.json` files are renamed to `bash-incus.json` when found.
-
-## Host command bypass
-
-When Incus bash is active, the footer displays a short shared host token. A single `bash` tool call can run on the host only when the latest user message explicitly requests host bash and includes that token. The token rotates after use.
-
-User `!` and `!!` commands always use the active Incus backend.
 
 ## Development
 

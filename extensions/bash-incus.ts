@@ -1,17 +1,6 @@
 import { spawn } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
-import {
-	closeSync,
-	existsSync,
-	mkdirSync,
-	openSync,
-	readFileSync,
-	renameSync,
-	unlinkSync,
-	unwatchFile,
-	watchFile,
-	writeFileSync,
-} from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { BashOperations, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -25,12 +14,8 @@ interface BashIncusConfig {
 	cwd?: string;
 }
 
-const HOST_TOKEN_ALPHABET = "abcdefghijklmnopqrstuvwxyz";
-const HOST_TOKEN_LENGTH = 5;
 const CONFIG_FILE = "bash-incus.json";
 const LEGACY_CONFIG_FILE = "incus-bash.json";
-const HOST_TOKEN_FILE = "incus-bash-host-token.json";
-const HOST_TOKEN_WATCH_INTERVAL_MS = 500;
 const INCUS_COMMAND_RUNNER =
 	'pid_file=$1; command=$2; umask 077; printf "%s\\n" "$$" > "$pid_file"; bash -lc "$command"; status=$?; rm -f -- "$pid_file"; exit "$status"';
 const INCUS_COMMAND_TERMINATOR =
@@ -42,12 +27,6 @@ export const __testIncusCommandTerminator = INCUS_COMMAND_TERMINATOR;
 const bashIncusSchema = Type.Object({
 	command: Type.String({ description: "Bash command to execute" }),
 	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
-	host: Type.Optional(
-		Type.String({
-			description:
-				"Run this single command on the host instead of Incus. Only use when the latest user message explicitly asks for host bash and includes the current host token from the status bar.",
-		}),
-	),
 });
 
 type BashIncusInput = Static<typeof bashIncusSchema>;
@@ -56,9 +35,6 @@ interface BashIncusState {
 	enabled: boolean;
 	container?: string;
 	containerCwd?: string;
-	hostToken: string;
-	latestUserInput?: string;
-	stopHostTokenWatcher?: () => void;
 }
 
 function readConfigFile(path: string): BashIncusConfig {
@@ -122,86 +98,6 @@ function writeProjectConfig(cwd: string, config: BashIncusConfig) {
 	const configDirectory = dirname(configFile);
 	if (!existsSync(configDirectory)) mkdirSync(configDirectory, { recursive: true });
 	writeConfigFile(configFile, config);
-}
-
-function createHostToken(): string {
-	const bytes = randomBytes(HOST_TOKEN_LENGTH);
-	return Array.from(bytes, (byte) => HOST_TOKEN_ALPHABET[byte % HOST_TOKEN_ALPHABET.length]).join("");
-}
-
-function hostTokenFile(): string {
-	return join(getAgentDir(), HOST_TOKEN_FILE);
-}
-
-function hostTokenLockFile(): string {
-	return `${hostTokenFile()}.lock`;
-}
-
-function isHostToken(value: unknown): value is string {
-	return typeof value === "string" && /^[a-z]{5}$/.test(value);
-}
-
-function readSharedHostTokenFile(): string | undefined {
-	try {
-		const parsed = JSON.parse(readFileSync(hostTokenFile(), "utf-8")) as { token?: unknown };
-		return isHostToken(parsed.token) ? parsed.token : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-function writeSharedHostTokenFile(token: string) {
-	const path = hostTokenFile();
-	const tmpPath = `${path}.${process.pid}.tmp`;
-	writeFileSync(tmpPath, `${JSON.stringify({ token }, null, 2)}\n`, { mode: 0o600 });
-	renameSync(tmpPath, path);
-}
-
-function withHostTokenLock<T>(fn: () => T): T {
-	const lockFile = hostTokenLockFile();
-	const fd = openSync(lockFile, "wx");
-
-	try {
-		return fn();
-	} finally {
-		closeSync(fd);
-		try {
-			unlinkSync(lockFile);
-		} catch {
-			// Lock already gone; nothing to clean up.
-		}
-	}
-}
-
-function readOrCreateSharedHostToken(): string {
-	const existing = readSharedHostTokenFile();
-	if (existing) return existing;
-
-	return withHostTokenLock(() => {
-		const lockedExisting = readSharedHostTokenFile();
-		if (lockedExisting) return lockedExisting;
-
-		const token = createHostToken();
-		writeSharedHostTokenFile(token);
-		return token;
-	});
-}
-
-function initialHostToken(): string {
-	try {
-		return readOrCreateSharedHostToken();
-	} catch {
-		return readSharedHostTokenFile() ?? createHostToken();
-	}
-}
-
-function refreshHostToken(state: Pick<BashIncusState, "hostToken">): string {
-	try {
-		state.hostToken = readOrCreateSharedHostToken();
-	} catch {
-		// Keep the last known token if another process is rotating it right now.
-	}
-	return state.hostToken;
 }
 
 function toBashParams(params: BashIncusInput): { command: string; timeout?: number } {
@@ -364,33 +260,6 @@ function deactivate(state: BashIncusState) {
 function applyUiStatus(ctx: ExtensionContext, state: BashIncusState) {
 	const active = state.enabled && state.container;
 	ctx.ui.setStatus("bash-incus", active ? `incus:${state.container}` : undefined);
-	ctx.ui.setStatus("bash-incus-host", active ? `host:${refreshHostToken(state)}` : undefined);
-}
-
-function watchHostToken(ctx: ExtensionContext, state: BashIncusState) {
-	state.stopHostTokenWatcher?.();
-
-	const path = hostTokenFile();
-	const listener = () => applyUiStatus(ctx, state);
-	watchFile(path, { interval: HOST_TOKEN_WATCH_INTERVAL_MS, persistent: false }, listener);
-	state.stopHostTokenWatcher = () => {
-		unwatchFile(path, listener);
-		state.stopHostTokenWatcher = undefined;
-	};
-}
-
-function consumeHostToken(ctx: ExtensionContext, state: BashIncusState, token: string) {
-	if (!state.latestUserInput?.includes(token)) throw new Error("Host bash token must appear in the latest user message");
-
-	state.hostToken = withHostTokenLock(() => {
-		const currentToken = readSharedHostTokenFile();
-		if (token !== currentToken) throw new Error("Invalid host bash token");
-
-		const nextToken = createHostToken();
-		writeSharedHostTokenFile(nextToken);
-		return nextToken;
-	});
-	applyUiStatus(ctx, state);
 }
 
 export default function (pi: ExtensionAPI) {
@@ -410,7 +279,7 @@ export default function (pi: ExtensionAPI) {
 
 	const hostCwd = process.cwd();
 	const localBash = createBashTool(hostCwd);
-	const state: BashIncusState = { enabled: false, hostToken: "" };
+	const state: BashIncusState = { enabled: false };
 	let bashToolRegistered = false;
 
 	const ensureBashToolRegistered = () => {
@@ -420,15 +289,10 @@ export default function (pi: ExtensionAPI) {
 			...localBash,
 			label: "bash (local/incus)",
 			parameters: bashIncusSchema,
-			async execute(id, params: BashIncusInput, signal, onUpdate, ctx) {
+			async execute(id, params: BashIncusInput, signal, onUpdate) {
 				const bashParams = toBashParams(params);
 
 				if (!state.enabled || !state.container) {
-					return localBash.execute(id, bashParams, signal, onUpdate);
-				}
-
-				if (params.host !== undefined) {
-					consumeHostToken(ctx, state, params.host);
 					return localBash.execute(id, bashParams, signal, onUpdate);
 				}
 
@@ -443,10 +307,6 @@ export default function (pi: ExtensionAPI) {
 		});
 		bashToolRegistered = true;
 	};
-
-	pi.on("input", (event) => {
-		state.latestUserInput = event.text;
-	});
 
 	pi.on("user_bash", () => {
 		if (!state.enabled || !state.container) return;
@@ -470,19 +330,9 @@ export default function (pi: ExtensionAPI) {
 			else deactivate(state);
 		}
 
-		if (state.enabled) {
-			state.hostToken = initialHostToken();
-			ensureBashToolRegistered();
-			watchHostToken(ctx, state);
-		} else {
-			state.stopHostTokenWatcher?.();
-		}
+		if (state.enabled) ensureBashToolRegistered();
 		applyUiStatus(ctx, state);
 		if (state.enabled) ctx.ui.notify(statusText(state), "info");
-	});
-
-	pi.on("session_shutdown", () => {
-		state.stopHostTokenWatcher?.();
 	});
 
 	pi.on("before_agent_start", async (event) => {
@@ -491,7 +341,7 @@ export default function (pi: ExtensionAPI) {
 		return {
 			systemPrompt: `${event.systemPrompt}\n\nIncus bash mode is enabled. The bash tool and user !/!! commands run inside Incus container ${JSON.stringify(
 				state.container,
-			)}${state.containerCwd ? ` with container cwd ${JSON.stringify(state.containerCwd)}` : ""}. The read, edit, and write tools still operate on the host filesystem, so assume the project is mounted consistently between host and container. The bash tool has an optional shared host token parameter for one-command host bypass; never set it unless the latest user message explicitly asks for host bash and includes the current host token from the status bar.`,
+			)}${state.containerCwd ? ` with container cwd ${JSON.stringify(state.containerCwd)}` : ""}. The read, edit, and write tools still operate on the host filesystem, so assume the project is mounted consistently between host and container.`,
 		};
 	});
 
@@ -516,9 +366,7 @@ export default function (pi: ExtensionAPI) {
 
 				writeConfigFile(configFile, { ...config, enabled: true });
 				activate(state, config.container, config.cwd);
-				state.hostToken = initialHostToken();
 				ensureBashToolRegistered();
-				watchHostToken(ctx, state);
 				applyUiStatus(ctx, state);
 				ctx.ui.notify(statusText(state), "info");
 				return;
@@ -536,7 +384,6 @@ export default function (pi: ExtensionAPI) {
 					...(state.containerCwd ? { cwd: state.containerCwd } : {}),
 				});
 				deactivate(state);
-				state.stopHostTokenWatcher?.();
 				applyUiStatus(ctx, state);
 				ctx.ui.notify("Incus bash disabled", "info");
 				return;
@@ -553,9 +400,7 @@ export default function (pi: ExtensionAPI) {
 				...(parts[1] ? { cwd: parts[1] } : {}),
 			});
 			activate(state, parts[0], parts[1]);
-			state.hostToken = initialHostToken();
 			ensureBashToolRegistered();
-			watchHostToken(ctx, state);
 			applyUiStatus(ctx, state);
 			ctx.ui.notify(statusText(state), "info");
 		},

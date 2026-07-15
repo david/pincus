@@ -1,80 +1,114 @@
-# pi-bash-incus
+# Pincus
 
-A [Pi](https://github.com/earendil-works/pi-mono) extension that routes the `bash` tool and user `!`/`!!` commands through an existing [Incus](https://linuxcontainers.org/incus/) container.
+Pincus is a [Pi](https://github.com/earendil-works/pi-mono) extension that routes Pi's built-in project tools through an existing [Incus](https://linuxcontainers.org/incus/) container while Pi itself stays on the host.
 
 > [!NOTE]
-> `pi-bash-incus` currently supports Linux hosts and Linux containers only.
+> Pincus supports Linux hosts and Linux containers.
 
-Pi's `read`, `edit`, and `write` tools continue to use the host filesystem. The project should therefore be mounted at matching paths on the host and in the container, or configured with a container-side working directory.
+## Routed operations
 
-## Install
+When enabled, Pincus routes these built-in tools into the selected container:
 
-Install the latest Git version for your user:
+- `bash`
+- `read`, including binary image reads
+- `write`
+- `edit`
+- `ls`
+- `find`
+- `grep`
+- User `!` and `!!` commands
 
-```bash
-pi install git:github.com/david/pi-bash-incus
-```
-
-Or install a pinned release:
-
-```bash
-pi install git:github.com/david/pi-bash-incus@v0.2.2
-```
-
-Restart Pi or run `/reload` after installation.
+Pincus does **not** move the Pi process into the container. Custom extension tools, MCP tools, Pi configuration, authentication, and sessions remain on the host unless those tools provide their own container backend.
 
 ## Requirements
 
 - The `incus` CLI on the host.
-- An already-running Incus container.
-- `bash`, `id`, `runuser`, and `setsid` in the container.
-- A container user with the same UID as the host user and access to the mounted project files.
-- Project files mounted into the container.
+- An existing, running Incus container.
+- A container user whose UID matches the host user's UID.
+- The project available inside the container, normally through an Incus disk device or another mount.
+- These container commands:
+  - `bash`, `id`, `runuser`, and `setsid`
+  - `cat`, `file`, `find`, `mkdir`, `tee`, and `test`
+  - `fd` for the `find` tool
+  - `rg` (ripgrep) for the `grep` tool
 
-The extension passes the host UID and selected working directory to a root `incus exec` wrapper. The wrapper resolves the matching container username and uses `runuser` to initialize that account's container-native environment before running the command. The extension does not set or forward host `HOME`, `USER`, `LOGNAME`, `PATH`, or other environment variables.
+Each operation starts through root `incus exec`, resolves the container username for the host UID, and then uses `runuser` plus a login Bash shell. This gives the operation the container user's permissions and container-native environment. Pincus does not forward the host `HOME`, `USER`, `LOGNAME`, `PATH`, or other command environment values.
 
-## Usage
+Arguments and paths are passed as process arguments rather than interpolated into shell source. Writes send file content over stdin. Cancellation and timeouts terminate the operation's container process group, including descendants.
 
-Enable Incus-backed bash and save the project configuration:
+## Install
+
+Install the latest Git version:
+
+```bash
+pi install git:github.com/david/pincus
+```
+
+Version `0.3.0` is prepared in this repository but is not released until a `v0.3.0` tag is published. After installing or updating, restart Pi or run `/reload`.
+
+## Commands
+
+Enable Pincus and save the project configuration:
 
 ```text
-/bash-incus <container> [container-cwd]
+/pincus <container> [container-cwd]
 ```
 
 Examples:
 
 ```text
-/bash-incus dev
-/bash-incus dev /workspace/project
+/pincus dev
+/pincus dev /workspace/my-project
+/pincus dev /workspace/a project with spaces
 ```
 
-Other command forms:
+Other forms:
 
 ```text
-/bash-incus          Re-enable the saved project configuration
-/bash-incus status   Show the current state
-/bash-incus off      Disable Incus bash and preserve the saved container
+/pincus          Re-enable the saved project configuration
+/pincus status   Show the current state
+/pincus off      Disable Pincus and preserve the saved container
 ```
 
-The no-argument command does nothing when Incus bash is already active. It reports an error when the project has no saved configuration.
+The no-argument command does nothing when the saved configuration is already active. It reports an error when the project has no saved configuration.
+
+`/bash-incus` remains as a compatibility alias and accepts the same arguments.
 
 ## CLI flags
 
 ```text
---incus-container <container>  Enable Incus bash for this process
---incus-cwd <path>             Map Pi's startup directory to this container path
---no-bash-incus                Disable configured Incus bash for this process
+--pincus-container <container>  Enable Pincus for this process
+--pincus-cwd <path>             Map Pi's startup directory to this container path
+--no-pincus                     Disable Pincus for this process
 ```
 
-## Configuration
+The old `--incus-container`, `--incus-cwd`, and `--no-bash-incus` flags are still accepted. New flags take precedence when both forms are present.
 
-The extension reads configuration from:
+## Configuration and migration
 
-1. `~/.pi/agent/bash-incus.json`
-2. The nearest `.pi/bash-incus.json` from the startup directory up to the home directory
-3. CLI flags, which override file values
+Pincus reads configuration in this order:
 
-Example:
+1. `~/.pi/agent/pincus.json`
+2. The nearest `.pi/pincus.json` from Pi's startup directory toward the home directory
+3. CLI flags
+
+Project values override global values. CLI flags override file values.
+
+```json
+{
+  "enabled": true,
+  "container": "dev",
+  "cwd": "/workspace/my-project"
+}
+```
+
+Existing `bash-incus.json` and older `incus-bash.json` files are renamed to `pincus.json` when found. If both legacy names exist in one directory, `bash-incus.json` has priority. The old command and flags remain available after migration.
+
+## Path mapping
+
+The configured container cwd corresponds to the directory where Pi started on the host.
+
+For example, with Pi started in `/home/me/project` and this configuration:
 
 ```json
 {
@@ -84,7 +118,18 @@ Example:
 }
 ```
 
-Legacy global and project `incus-bash.json` files are renamed to `bash-incus.json` when found.
+Pincus maps paths as follows:
+
+- `src/app.ts` → `/workspace/project/src/app.ts`
+- `/home/me/project/src/app.ts` → `/workspace/project/src/app.ts`
+- `/workspace/project/src/app.ts` stays unchanged
+- Other valid container absolute paths, such as `/etc/os-release`, stay unchanged
+
+Relative paths, including paths containing `..`, resolve from the container cwd. If `cwd` is omitted, Pincus uses the same absolute path in the container as Pi's host startup directory.
+
+## Compatibility with other backends
+
+Pincus registers built-in tool overrides only after Incus mode is activated. An unconfigured project therefore does not replace another backend extension. Each override is registered at most once. If Pincus is disabled later, its registered overrides delegate to Pi's local built-in tools.
 
 ## Development
 
@@ -94,7 +139,17 @@ npm run check
 npm test
 ```
 
-The tests cover configuration migration, command persistence, and process-group termination.
+The normal test suite uses a local fake Incus transport to exercise path mapping, all routed tools, migration, fallback, cancellation, timeouts, process cleanup, limits, and result shapes.
+
+An optional real-Incus smoke test creates a temporary host fixture and mounts it at a different container path:
+
+```bash
+PINCUS_INCUS_SMOKE=1 \
+PINCUS_INCUS_CONTAINER=dev \
+npm run test:smoke
+```
+
+Set `PINCUS_INCUS_SMOKE_CWD` to choose the temporary container mount path.
 
 ## License
 

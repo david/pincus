@@ -1,12 +1,12 @@
 {
-  "name": "pi-bash-incus",
-  "version": "0.2.2",
-  "description": "Run Pi bash commands inside an Incus container",
+  "name": "pincus",
+  "version": "0.3.0",
+  "description": "Route Pi's built-in project tools into existing Incus containers",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/david/pi-bash-incus.git"
+    "url": "git+https://github.com/david/pincus.git"
   },
   "keywords": [
     "pi-package",
@@ -21,11 +21,12 @@
   ],
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "node --experimental-strip-types tests/bash-incus.test.ts"
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test:smoke": "PINCUS_INCUS_SMOKE=1 node --experimental-strip-types --test tests/incus-smoke.test.ts"
   },
   "pi": {
     "extensions": [
-      "./extensions/bash-incus.ts"
+      "./extensions/pincus.ts"
     ]
   },
   "peerDependencies": {

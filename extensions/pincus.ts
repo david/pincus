@@ -1,8 +1,9 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path, { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type {
 	BashOperations,
 	EditOperations,
@@ -84,6 +85,33 @@ const DEFAULT_GREP_LIMIT = 100;
 const GREP_MAX_LINE_LENGTH = 500;
 const PI_CLIPBOARD_IMAGE_PATTERN =
 	/^pi-clipboard-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:bmp|gif|jpe?g|png|webp)$/i;
+const PI_BASH_OUTPUT_PATTERN = /^pi-bash-[0-9a-f]{16}\.log$/i;
+
+function resolvePiPackageRoot(): string | undefined {
+	const candidates: string[] = [];
+	try {
+		candidates.push(dirname(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")))));
+	} catch {
+		// Installed git packages may not resolve peer dependencies through Node's native resolver.
+	}
+	try {
+		if (process.argv[1]) candidates.push(dirname(dirname(realpathSync(process.argv[1]))));
+	} catch {
+		// Ignore non-file entry points used by embedded SDK callers.
+	}
+
+	for (const candidate of candidates) {
+		try {
+			const manifest = JSON.parse(readFileSync(join(candidate, "package.json"), "utf8")) as { name?: string };
+			if (manifest.name === "@earendil-works/pi-coding-agent") return candidate;
+		} catch {
+			// Try the next candidate.
+		}
+	}
+	return undefined;
+}
+
+const PI_PACKAGE_ROOT = resolvePiPackageRoot();
 
 const INCUS_OPERATION_RUNNER =
 	'pid_file=$1; shift; umask 077; printf "%s\\n" "$$" > "$pid_file"; "$@"; status=$?; rm -f -- "$pid_file"; exit "$status"';
@@ -105,13 +133,17 @@ function isWithin(root: string, value: string): boolean {
 	return relativePath === "" || (!relativePath.startsWith(`..${path.sep}`) && relativePath !== ".." && !isAbsolute(relativePath));
 }
 
-function isHostClipboardImagePath(inputPath: string): boolean {
+function isHostPiTempPath(inputPath: string, pattern: RegExp): boolean {
 	const absolutePath = resolve(stripAtPrefix(inputPath));
-	return (
-		dirname(absolutePath) === resolve(tmpdir()) &&
-		PI_CLIPBOARD_IMAGE_PATTERN.test(basename(absolutePath)) &&
-		existsSync(absolutePath)
-	);
+	return dirname(absolutePath) === resolve(tmpdir()) && pattern.test(basename(absolutePath)) && existsSync(absolutePath);
+}
+
+function isHostClipboardImagePath(inputPath: string): boolean {
+	return isHostPiTempPath(inputPath, PI_CLIPBOARD_IMAGE_PATTERN);
+}
+
+function isHostBashOutputPath(inputPath: string): boolean {
+	return isHostPiTempPath(inputPath, PI_BASH_OUTPUT_PATTERN);
 }
 
 function detectImageMimeType(buffer: Buffer): string | null {
@@ -666,12 +698,13 @@ export default function registerPincus(pi: ExtensionAPI): void {
 	const state: PincusState = { enabled: false };
 	let overridesRegistered = false;
 	let hostSkillRoots: string[] = [];
+	const hostResourceRoots = [resolve(getAgentDir()), ...(PI_PACKAGE_ROOT ? [resolve(PI_PACKAGE_ROOT)] : [])];
 
-	const isHostSkillPath = (inputPath: string) => {
+	const isHostResourcePath = (inputPath: string) => {
 		const value = stripAtPrefix(inputPath);
 		if (!isAbsolute(value)) return false;
 		const absolutePath = resolve(value);
-		return hostSkillRoots.some((root) => isWithin(root, absolutePath));
+		return [...hostResourceRoots, ...hostSkillRoots].some((root) => isWithin(root, absolutePath));
 	};
 
 	const activeBackend = () => {
@@ -698,7 +731,12 @@ export default function registerPincus(pi: ExtensionAPI): void {
 			...localTools.read,
 			async execute(id, params, signal, onUpdate) {
 				const backend = activeBackend();
-				if (!backend || isHostClipboardImagePath(params.path) || isHostSkillPath(params.path)) {
+				if (
+					!backend ||
+					isHostClipboardImagePath(params.path) ||
+					isHostBashOutputPath(params.path) ||
+					isHostResourcePath(params.path)
+				) {
 					return localTools.read.execute(id, params, signal, onUpdate);
 				}
 				return createReadTool(backend.mapping.containerRoot, {
@@ -790,7 +828,7 @@ export default function registerPincus(pi: ExtensionAPI): void {
 		if (!state.enabled || !state.container) return;
 		const containerRoot = state.containerCwd ?? hostRoot;
 		return {
-			systemPrompt: `${event.systemPrompt}\n\nPincus mode is enabled. The built-in bash, read, write, edit, ls, find, and grep tools, plus user !/!! commands, run inside existing Incus container ${JSON.stringify(state.container)} as the container user whose UID matches the host UID. Pi started on the host in ${JSON.stringify(hostRoot)}; that directory corresponds to ${JSON.stringify(containerRoot)} in the container. Resolve relative tool paths from the container path. Host absolute paths under ${JSON.stringify(hostRoot)} are translated to the matching path under ${JSON.stringify(containerRoot)}. Other valid container absolute paths are used unchanged. Reads within skills discovered by host Pi stay on the host so their instructions and supporting files remain available. Pi configuration, sessions, custom tools, and MCP tools remain on the host.`,
+			systemPrompt: `${event.systemPrompt}\n\nPincus mode is enabled. The built-in bash, read, write, edit, ls, find, and grep tools, plus user !/!! commands, run inside existing Incus container ${JSON.stringify(state.container)} as the container user whose UID matches the host UID. Pi started on the host in ${JSON.stringify(hostRoot)}; that directory corresponds to ${JSON.stringify(containerRoot)} in the container. Resolve relative tool paths from the container path. Host absolute paths under ${JSON.stringify(hostRoot)} are translated to the matching path under ${JSON.stringify(containerRoot)}. Other valid container absolute paths are used unchanged. Reads of Pi-managed host resources, discovered skills, and host-generated full-output logs stay on the host. Pi configuration, sessions, custom tools, and MCP tools remain on the host.`,
 		};
 	});
 

@@ -59,6 +59,12 @@ if [ "$4" = pincus-user ]; then
     printf "file must not be used by Pincus read operations\\n" >&2
     exit 127
   fi
+  case "\${3:-}" in
+    */node_modules/@earendil-works/pi-coding-agent/*|/tmp/pi-bash-*.log)
+      printf "host-only Pi path must not be read through fake Incus: %s\n" "\${3:-}" >&2
+      exit 66
+      ;;
+  esac
   exec setsid bash -lc "$runner" pincus-operation "$pid_file" "$@"
 fi
 if [ "$4" = pincus-cleanup ]; then
@@ -447,6 +453,37 @@ test("discovered skill files stay on the host", async () => {
 		assert.equal(skillResult.content[0].text, "# Prompt only\n\nHost skill instructions.\n");
 		await assert.rejects(readFile(join(harness.containerRoot, ".agents", "skills", "prompt-only", "SKILL.md")));
 	} finally {
+		await harness.cleanup();
+	}
+});
+
+test("Pi documentation and truncated bash output stay readable on the host", async () => {
+	const harness = await createHarness();
+	const docsPath = join(
+		originalCwd,
+		"node_modules",
+		"@earendil-works",
+		"pi-coding-agent",
+		"docs",
+		"extensions.md",
+	);
+	let fullOutputPath: string | undefined;
+	try {
+		await harness.commands.get("pincus").handler(`dev ${harness.containerRoot}`, harness.ctx);
+
+		const docsResult = await execute(harness.tools.get("read"), { path: docsPath, offset: 1, limit: 2 });
+		assert.match(docsResult.content[0].text, /pi can create extensions/);
+
+		const bashResult = await execute(harness.tools.get("bash"), {
+			command: `for ((i=1; i<=3000; i++)); do printf 'line-%04d payload payload payload\\n' "$i"; done`,
+		});
+		fullOutputPath = bashResult.details?.fullOutputPath;
+		assert.match(fullOutputPath ?? "", /\/pi-bash-[0-9a-f]{16}\.log$/);
+
+		const outputResult = await execute(harness.tools.get("read"), { path: fullOutputPath, offset: 1, limit: 2 });
+		assert.match(outputResult.content[0].text, /^line-0001 payload payload payload\nline-0002 payload payload payload/);
+	} finally {
+		if (fullOutputPath) await rm(fullOutputPath, { force: true });
 		await harness.cleanup();
 	}
 });

@@ -129,7 +129,9 @@ Relative paths, including paths containing `..`, resolve from the container cwd.
 
 Pi stores pasted clipboard images in the host temporary directory as `pi-clipboard-<uuid>.<image-extension>`. When such a file exists on the host, Pincus intentionally delegates that read to Pi's local read backend so image attachments continue to work. Other `/tmp` paths remain container paths.
 
-Pi also discovers skills on the host and tells the agent to load their instructions with the `read` tool. Reads within those discovered skill directories use Pi's local read backend so global, project, package, configured, and CLI-provided skills remain available while Pincus is active.
+Some files are created or managed by host Pi rather than the container. Reads within Pi's agent directory and installed package directory use the local backend, so configuration and bundled documentation remain available. The same applies to global, project, package, configured, and CLI-provided skill directories discovered by Pi.
+
+When routed `bash` output is truncated, Pi saves the complete stream on the host as `/tmp/pi-bash-<id>.log`. Reads of those generated logs also use the local backend. Use the `read` tool rather than a container command such as `cat` or `sed` to retrieve them.
 
 ## Compatibility with other backends
 
